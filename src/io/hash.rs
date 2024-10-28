@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use anyhow::{bail, ensure, Context, Error, Result};
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::sha;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use sha2::digest::FixedOutput;
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -36,8 +36,8 @@ pub enum IgnitionHash {
 /// Digest implementation.  Helpfully, each digest in openssl::sha has a
 /// different type.
 enum IgnitionHasher {
-    Sha256(sha::Sha256),
-    Sha512(sha::Sha512),
+    Sha256(sha2::Sha256),
+    Sha512(sha2::Sha512),
 }
 
 impl FromStr for IgnitionHash {
@@ -94,8 +94,8 @@ impl IgnitionHash {
     /// Digest and validate input data.
     pub fn validate(&self, input: &mut impl Read) -> Result<()> {
         let (mut hasher, digest) = match self {
-            IgnitionHash::Sha256(val) => (IgnitionHasher::Sha256(sha::Sha256::new()), val),
-            IgnitionHash::Sha512(val) => (IgnitionHasher::Sha512(sha::Sha512::new()), val),
+            IgnitionHash::Sha256(val) => (IgnitionHasher::Sha256(sha2::Sha256::new()), val),
+            IgnitionHash::Sha512(val) => (IgnitionHasher::Sha512(sha2::Sha512::new()), val),
         };
         let mut buf = [0u8; 128 * 1024];
         loop {
@@ -110,8 +110,8 @@ impl IgnitionHash {
             };
         }
         let computed = match hasher {
-            IgnitionHasher::Sha256(h) => h.finish().to_vec(),
-            IgnitionHasher::Sha512(h) => h.finish().to_vec(),
+            IgnitionHasher::Sha256(h) => h.finalize().to_vec(),
+            IgnitionHasher::Sha512(h) => h.finalize().to_vec(),
         };
 
         if &computed != digest {
@@ -129,13 +129,13 @@ impl IgnitionHash {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct Sha256Digest(pub [u8; 32]);
 
-impl TryFrom<Hasher> for Sha256Digest {
+impl TryFrom<Sha256> for Sha256Digest {
     type Error = Error;
 
-    fn try_from(mut hasher: Hasher) -> std::result::Result<Self, Self::Error> {
-        let digest = hasher.finish().context("finishing hash")?;
+    fn try_from(hasher: Sha256) -> std::result::Result<Self, Self::Error> {
+        let digest = hasher.finalize();
         Ok(Sha256Digest(
-            digest.as_ref().try_into().context("converting to SHA256")?,
+            digest.try_into().context("converting to SHA256")?,
         ))
     }
 }
@@ -167,7 +167,7 @@ impl Sha256Digest {
 
     /// Calculates the SHA256 of a reader.
     pub fn from_reader(r: &mut impl Read) -> Result<Self> {
-        let mut hasher = Hasher::new(MessageDigest::sha256()).context("creating SHA256 hasher")?;
+        let mut hasher = Sha256::new();
         std::io::copy(r, &mut hasher)?;
         hasher.try_into()
     }
@@ -181,23 +181,25 @@ impl Sha256Digest {
     }
 }
 
-pub struct WriteHasher<W: Write> {
+pub struct WriteHasher<W: Write, H: FixedOutput + Write> {
     writer: W,
-    hasher: Hasher,
+    hasher: H,
 }
 
-impl<W: Write> WriteHasher<W> {
-    pub fn new(writer: W, hasher: Hasher) -> Self {
+impl<W: Write, H: FixedOutput + Write> WriteHasher<W, H> {
+    pub fn new(writer: W, hasher: H) -> Self {
         WriteHasher { writer, hasher }
     }
+}
 
+impl<W: Write> WriteHasher<W, Sha256> {
     pub fn new_sha256(writer: W) -> Result<Self> {
-        let hasher = Hasher::new(MessageDigest::sha256()).context("creating SHA256 hasher")?;
+        let hasher = Sha256::new();
         Ok(WriteHasher { writer, hasher })
     }
 }
 
-impl<W: Write> Write for WriteHasher<W> {
+impl<W: Write, H: FixedOutput + Write> Write for WriteHasher<W, H> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -216,11 +218,11 @@ impl<W: Write> Write for WriteHasher<W> {
     }
 }
 
-impl<W: Write> TryFrom<WriteHasher<W>> for Sha256Digest {
+impl<W: Write> TryFrom<WriteHasher<W, Sha256>> for Sha256Digest {
     type Error = Error;
 
-    fn try_from(wrapper: WriteHasher<W>) -> std::result::Result<Self, Self::Error> {
-        Sha256Digest::try_from(wrapper.hasher)
+    fn try_from(wrapper: WriteHasher<W, Sha256>) -> std::result::Result<Self, Self::Error> {
+        Ok(Sha256Digest::try_from(wrapper.hasher).unwrap())
     }
 }
 

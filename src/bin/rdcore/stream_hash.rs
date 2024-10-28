@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::{bail, Context, Result};
-use openssl::sha;
 use regex::Regex;
 use std::fs::OpenOptions;
 use std::io::{self, stdin, stdout, BufRead, BufReader, Read, Write};

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use anyhow::{bail, Context, Result};
-use openssl::hash::{Hasher, MessageDigest};
+use sha2::{Digest, Sha256};
 use xz2::read::XzDecoder;
 
 use super::*;
@@ -94,7 +94,7 @@ pub(super) fn get_unpacked_image_digest(
     partitions: &[OsmetPartition],
     root: &Mount,
 ) -> Result<(Sha256Digest, u64)> {
-    let mut hasher = Hasher::new(MessageDigest::sha256()).context("creating SHA256 hasher")?;
+    let mut hasher = Sha256::new();
     let repo = root.mountpoint().join("ostree/repo");
     let mut packed_image = XzDecoder::new(xzpacked_image);
     let n = write_unpacked_image(&mut packed_image, &mut hasher, partitions, &repo)?;
